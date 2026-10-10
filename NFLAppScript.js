@@ -36,7 +36,7 @@
 // expected set, rather than risk writing into the wrong columns.
 // ======================================================
 
-function pullNFLScheduleUpsert(year) {
+function pullNFLScheduleUpsertImpl_(year) {
   const sheetName = "NFL_Schedule";
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(sheetName);
@@ -290,7 +290,7 @@ function addNFLByeWeeksForYear_(gameRecords, season, firstWeek, lastWeek) {
 //    Target: API_NFL_OddsHistory
 // ======================================================
 
-function snapshotNFLCurrentOdds() {
+function snapshotNFLCurrentOddsImpl_() {
   const season = 2026;
   const firstWeek = 1;
   const lastWeek = 18;
@@ -342,10 +342,8 @@ function snapshotNFLCurrentOdds() {
         const matchup = awayTeam + " @ " + homeTeam;
 
         const odds = (competition.odds && competition.odds[0]) || {};
-        if (!odds.details && odds.overUnder == null && !odds.awayTeamOdds && !odds.homeTeamOdds) return;
+        if (!odds.details && odds.overUnder == null && !odds.awayTeamOdds && !odds.homeTeamOdds && !odds.moneyline) return;
 
-        const awayOdds = odds.awayTeamOdds || {};
-        const homeOdds = odds.homeTeamOdds || {};
         const provider = odds.provider || {};
         const snapshotId = event.id + "-" + Utilities.formatDate(pulledAt, Session.getScriptTimeZone(), "yyyyMMdd-HHmmss");
 
@@ -360,8 +358,14 @@ function snapshotNFLCurrentOdds() {
           OddsProvider: provider.name || provider.displayName || provider.nameDisplay || "",
           Spread: odds.details || "",
           OverUnder: odds.overUnder ?? "",
-          AwayMoneyline: awayOdds.moneyLine ?? "",
-          HomeMoneyline: homeOdds.moneyLine ?? "",
+          // extractMoneyline_ lives in Automation.gs - Apps Script shares
+          // one global scope across files in the same project, so it's
+          // callable here directly. It tolerates both the old flat
+          // awayTeamOdds/homeTeamOdds.moneyLine field ESPN used to send
+          // and the newer odds.moneyline.away/home.close.odds shape they
+          // migrated to, which is why moneylines were coming back blank.
+          AwayMoneyline: extractMoneyline_(odds, "away"),
+          HomeMoneyline: extractMoneyline_(odds, "home"),
           IsOpeningSnapshot: false,
           IsClosingSnapshot: false
         });
@@ -384,12 +388,97 @@ function snapshotNFLCurrentOdds() {
 }
 
 
+/**
+ * One-off backfill for the blank AwayMoneyline/HomeMoneyline cells
+ * left behind before the extractMoneyline_ fix. Per your call: this
+ * does NOT re-fetch anything live from ESPN - it just carries each
+ * game's most recent KNOWN moneyline forward into the blank cell(s)
+ * that came right after it. Rows in API_NFL_OddsHistory are appended
+ * in the order each pull ran, so walking top to bottom and
+ * remembering the last real value seen per EventID gives, for any
+ * blank cell, the most recent moneyline that snapshot actually had -
+ * e.g. today's earlier 4pm-pull value fills in a same-game gap left
+ * by today's later broken 6am-style pull.
+ *
+ * If a game's very FIRST row in the sheet is itself blank (nothing
+ * earlier to carry from), it's left as-is and counted separately -
+ * there's nothing to "pull in" for that one.
+ *
+ * Only ever writes into currently-blank cells, so it's safe to run
+ * more than once. Run from the function dropdown - no arguments.
+ */
+function backfillMissingOddsMoneylinesImpl_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("API_NFL_OddsHistory");
+  if (!sheet) return { status: "error", message: "API_NFL_OddsHistory sheet not found." };
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const colEventId = headers.indexOf("EventID");
+  const colAway = headers.indexOf("AwayMoneyline");
+  const colHome = headers.indexOf("HomeMoneyline");
+
+  if ([colEventId, colAway, colHome].indexOf(-1) !== -1) {
+    return { status: "error", message: "Expected columns (EventID, AwayMoneyline, HomeMoneyline) not found on API_NFL_OddsHistory." };
+  }
+
+  const lastAway = {};
+  const lastHome = {};
+  let filledAway = 0;
+  let filledHome = 0;
+  let stillBlankAway = 0;
+  let stillBlankHome = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const eventId = String(data[i][colEventId]);
+    const awayVal = data[i][colAway];
+    const homeVal = data[i][colHome];
+    const awayBlank = awayVal === "" || awayVal === null;
+    const homeBlank = homeVal === "" || homeVal === null;
+
+    if (awayBlank) {
+      if (lastAway[eventId] !== undefined) {
+        sheet.getRange(i + 1, colAway + 1).setValue(lastAway[eventId]);
+        filledAway++;
+      } else {
+        stillBlankAway++;
+      }
+    } else {
+      lastAway[eventId] = awayVal;
+    }
+
+    if (homeBlank) {
+      if (lastHome[eventId] !== undefined) {
+        sheet.getRange(i + 1, colHome + 1).setValue(lastHome[eventId]);
+        filledHome++;
+      } else {
+        stillBlankHome++;
+      }
+    } else {
+      lastHome[eventId] = homeVal;
+    }
+  }
+
+  const message = "Backfilled " + filledAway + " away + " + filledHome + " home moneyline cell(s) by carrying each game's most recent known value forward. " +
+    (stillBlankAway + stillBlankHome) + " cell(s) left blank (no earlier value existed yet for that game).";
+  Logger.log(message);
+  return {
+    status: "ok",
+    message: message,
+    filledAway: filledAway,
+    filledHome: filledHome,
+    stillBlankAway: stillBlankAway,
+    stillBlankHome: stillBlankHome
+  };
+}
+
+
 // ======================================================
 // 4. HISTORICAL NFL RESULTS - single copy (unchanged logic)
 //    Target: API_NFL_Results
 // ======================================================
 
-function pullNFLHistoricalResultsByDate() {
+function pullNFLHistoricalResultsByDateImpl_() {
   const seasons = [
     { season: 2024, startDate: new Date("2024-09-05"), endDate: new Date("2025-01-05") },
     { season: 2025, startDate: new Date("2025-09-04"), endDate: new Date("2026-01-04") }
@@ -560,7 +649,7 @@ function countScheduleRowsByYearAndType() {
 //    for each year to rebuild.
 // ======================================================
 
-function resetScheduleHeadersCompletely() {
+function resetScheduleHeadersCompletelyImpl_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName("NFL_Schedule");
 
@@ -584,66 +673,17 @@ function resetScheduleHeadersCompletely() {
 
   return { status: "ok", message: "Schedule reset - rebuild each year now" };
 }
-// ======================================================
-// 7. REMOVE PRESEASON - deletes PRESEASON-tagged rows for
-//    a given year from NFL_Schedule. GAME and BYE rows, and
-//    all other years, are never touched. Deletes bottom-up
-//    in merged contiguous chunks so row indices never shift
-//    out from under an in-progress delete.
-// ======================================================
 
-function removePreseasonRowsFromSchedule(year) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("NFL_Schedule");
-  if (!sheet) {
-    return { status: "error", message: "NFL_Schedule sheet not found.", removed: 0 };
-  }
 
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) {
-    return { status: "ok", removed: 0 };
-  }
-
-  const data = sheet.getRange(1, 1, lastRow, sheet.getLastColumn()).getValues();
-  const headers = data[0];
-  const colYear = headers.indexOf("SeasonYear");
-  const colRowType = headers.indexOf("RowType");
-
-  if (colYear === -1 || colRowType === -1) {
-    return { status: "error", message: "SeasonYear or RowType column not found.", removed: 0 };
-  }
-
-  // Walk bottom-up, deleting matching rows in merged contiguous
-  // chunks. Bottom-up means already-deleted rows never shift the
-  // index of rows still waiting to be checked/deleted.
-  let removed = 0;
-  let i = data.length - 1;
-  while (i >= 1) {
-    const matches = Number(data[i][colYear]) === Number(year) && data[i][colRowType] === "PRESEASON";
-    if (matches) {
-      let chunkEnd = i;
-      while (i >= 1 && Number(data[i][colYear]) === Number(year) && data[i][colRowType] === "PRESEASON") {
-        i--;
-      }
-      const chunkStart = i + 1; // first matching row in this contiguous run
-      const chunkSize = chunkEnd - chunkStart + 1;
-      sheet.deleteRows(chunkStart + 1, chunkSize); // +1 for 1-based sheet row
-      removed += chunkSize;
-    } else {
-      i--;
-    }
-  }
-
-  Logger.log("Removed " + removed + " PRESEASON row(s) for " + year + " from NFL_Schedule.");
-  return { status: "ok", removed: removed };
-}
-
-function DEBUG_removePreseason2026() {
-  return removePreseasonRowsFromSchedule(2026);
-}
-
-function DEBUG_whichSpreadsheet() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  Logger.log("Name: " + ss.getName());
-  Logger.log("ID: " + ss.getId());
-  Logger.log("URL: " + ss.getUrl());
-}
+// ------------------------------------------------------------
+// Public names unchanged - each just runs the original function above and
+// then bumps the cache data version (runThenBumpVersion_ lives in Code.gs),
+// since these all change data the Games and Parlay screens show.
+// backfillMissingOddsMoneylines is now public (no trailing underscore) so it
+// actually appears in the Apps Script editor's function dropdown.
+// ------------------------------------------------------------
+function pullNFLScheduleUpsert(...args) { return runThenBumpVersion_(pullNFLScheduleUpsertImpl_, args); }
+function snapshotNFLCurrentOdds(...args) { return runThenBumpVersion_(snapshotNFLCurrentOddsImpl_, args); }
+function backfillMissingOddsMoneylines(...args) { return runThenBumpVersion_(backfillMissingOddsMoneylinesImpl_, args); }
+function pullNFLHistoricalResultsByDate(...args) { return runThenBumpVersion_(pullNFLHistoricalResultsByDateImpl_, args); }
+function resetScheduleHeadersCompletely(...args) { return runThenBumpVersion_(resetScheduleHeadersCompletelyImpl_, args); }

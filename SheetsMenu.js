@@ -337,6 +337,10 @@ function menuRunUserMigrations() {
   results.push("SendText: " + addSendTextColumnToUsers().message);
   results.push("Notification prefs: " + addNotificationPreferenceColumns().message);
   results.push("Display names: " + addDisplayNameColumnToUsers().message);
+  results.push("Short names: " + addShortNameColumnToUsers().message);
+  results.push("Admin flag: " + addIsAdminColumnToUsers().message);
+  results.push("ParlayPicks ResolvedVia: " + addResolvedViaColumnToParlayPicks().message);
+  results.push("Schedule Network: " + addNetworkColumnToSchedule().message);
 
-  ui.alert("User Sheet Migrations", results.join("\n"), ui.ButtonSet.OK);
+  ui.alert("Run All Sheet Migrations", results.join("\n"), ui.ButtonSet.OK);
 }

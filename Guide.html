@@ -77,6 +77,24 @@
       font-size: 13px;
       margin-top: 10px;
     }
+    .highlight-gold {
+      background: linear-gradient(90deg, #fff4d6, #ffe9a8, #fff4d6);
+      border: 1px solid #e0b400;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-top: 10px;
+      color: #8a6400;
+    }
+    .highlight-red {
+      background: linear-gradient(90deg, #fbe2e2, #f6c9c9, #fbe2e2);
+      border: 1px solid #c96a6a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-top: 10px;
+      color: #7a1f1f;
+    }
     .dot {
       display: inline-block;
       width: 10px;
@@ -120,7 +138,20 @@
     </div>
 
     <div class="card">
-      <h2>🏈 Matchups</h2>
+      <h2>🏠 Home</h2>
+      <p>Your landing page. Cards show up here when there's something you should know:</p>
+      <ul>
+        <li><strong>Reminder</strong> - if you haven't finished this week's picks yet.</li>
+        <li><strong>Runback vote</strong> - a live Yes / No card while a vote is open (see Runback below).</li>
+        <li><strong>Parlay placed</strong> - once the week's Parlay is in, a card shows who placed it, how many legs, the odds, and what it pays if it hits. If a runback gets placed, that card replaces it.</li>
+        <li><strong>Last week's results</strong> - a table of how everyone did the week before (record, accuracy, and season rank), with a 🏆 next to the week's top finisher. It refreshes every Tuesday morning.</li>
+        <li><strong>Group updates</strong> - the weekly consensus picks and runback results, plus any note someone posts to the group. You can dismiss ones you've read, and remove notes you posted yourself.</li>
+      </ul>
+      <p style="color:var(--text-dim); font-size:12px;">New items are highlighted until you've seen them.</p>
+    </div>
+
+    <div class="card">
+      <h2>🏈 Games</h2>
       <p>This is home base - make your picks here each week.</p>
       <ul>
         <li><strong>Picks are blind.</strong> You won't see anyone else's pick for a game until you've submitted your own - no bandwagoning off whoever picks first.</li>
@@ -134,28 +165,58 @@
     </div>
 
     <div class="card">
-      <h2>🔥 Parlay Pick</h2>
+      <h2>🔥 Parlay</h2>
       <p>This is the group's "consensus" - whichever team got the most individual picks that week. Shows the pick, the result once the game's final, and everyone's individual dot for that game.</p>
-      <div class="highlight">🎉 <strong>Bonus:</strong> if every single person picks the same winning team on a game, you'll get a little celebration banner.</div>
+      <p>While the week's still in progress, you'll see a running <strong>"parlay potential"</strong> banner showing what the group's current picks would pay if they all hit, priced off the latest odds.</p>
+      <div class="highlight-gold">🎉 <strong>Perfect pick:</strong> if every single person picks the same winning team on a game, you'll get a little gold celebration banner.</div>
+      <div class="highlight-red">🙈 <strong>Group whiff:</strong> and if every single person picks wrong on a game... you'll hear about that too.</div>
+      <p>When the group's Parlay is actually placed, it's marked on this screen and everyone gets a text and a card on Home with the details.</p>
+      <div class="highlight-gold">🏆 <strong>Winning Parlay:</strong> once every game in the week is final, a banner shows what the parlay would have paid if every single pick had been the actual winning team - priced at the real closing odds. A fun "what could've been," whether or not the real parlay actually hit.</div>
     </div>
 
     <div class="card">
-      <h2>⚖️ Tie Break</h2>
+      <h2>🔁 Runback</h2>
+      <p>If the Parlay's pick in the <strong>first game of the week</strong> (usually Thursday night) loses, the group can vote to "run it back" - place a new Parlay on the remaining games.</p>
+      <ul>
+        <li>When the game goes final, a <strong>Yes / No card</strong> appears on Home and you get a text.</li>
+        <li>The vote <strong>closes at 11:59 PM the day after that first game</strong> (Friday night for a Thursday game).</li>
+        <li>It passes when <strong>more than half of the league votes Yes</strong>. If the deadline arrives without a majority, there's no runback.</li>
+        <li>As soon as it's decided, everyone gets a text - "Runback vote passed" or "Runback vote failed" - and it's posted on Home.</li>
+        <li>If it passes and the runback is placed, a card on Home shows who's in and the odds.</li>
+      </ul>
+      <p style="color:var(--text-dim); font-size:12px;">Text replies (<strong>RB YES</strong> / <strong>RB NO</strong>) will work as an alternative to the Home card once the league's text replies are switched on. Until then, vote on Home.</p>
+    </div>
+
+    <div class="card">
+      <h2>⚖️ Ties</h2>
       <p>Only shows up when the group's votes split evenly on a game. You'll get a text if this happens - just come vote again on the specific tied game(s). If it ties again, you'll get prompted for another round.</p>
       <div class="highlight"><strong>The fun part:</strong> if the group genuinely can't agree even after a re-vote, whoever had the best individual record last week gets to make the final call (or the season leader, if last week doesn't have a clear #1). Everyone else won't even see this option - only whoever's earned it.</div>
     </div>
 
     <div class="card">
-      <h2>📊 Standings</h2>
+      <h2>📊 Table</h2>
       <p>Ranked by average weekly accuracy (not just total correct picks) - so a great week and a rough week balance out fairly, rather than one bad week early in the season tanking you forever.</p>
+      <p>It opens on <strong>All Weeks</strong> (the season so far). Pick a single week from the dropdown to see just that week; the app remembers the one you chose.</p>
+    </div>
+
+    <div class="card">
+      <h2>👤 Profile</h2>
+      <p>Set your <strong>nickname</strong> and choose which texts you want. Everything saves from this one screen.</p>
+      <ul>
+        <li><strong>Text me</strong> - the master switch. Off means no texts at all.</li>
+        <li><strong>Week's consensus picks</strong> - the group's picks once everyone's in.</li>
+        <li><strong>Tie-break alerts</strong> and <strong>Tie-break results</strong> - when a tie is found, and when it's still tied or resolved.</li>
+        <li><strong>Runback votes</strong> - when a vote opens, and whether it passed or failed.</li>
+        <li><strong>Week open &amp; Parlay placed</strong> - Tuesday's "picks are open" text, plus the Parlay and Runback placed texts.</li>
+        <li><strong>Pick reminders</strong> - up to three of your own: choose a day (Tuesday to Thursday) and a time. They go only to you, and only if you haven't finished your picks.</li>
+      </ul>
     </div>
 
     <div class="card">
       <h2>⚙️ Behind the Scenes</h2>
       <p style="color:var(--text-dim); margin-top:-4px;">Here's what's happening automatically, so you know what to expect.</p>
 
-      <h3>Odds refresh 5x a week</h3>
-      <div class="automation-row"><span>Tuesday</span><span class="automation-time">12:05 AM</span></div>
+      <h3>Odds refresh 4x a week</h3>
       <div class="automation-row"><span>Tuesday</span><span class="automation-time">6:00 AM</span></div>
       <div class="automation-row"><span>Tuesday</span><span class="automation-time">4:00 PM</span></div>
       <div class="automation-row"><span>Wednesday</span><span class="automation-time">6:00 AM</span></div>
@@ -166,19 +227,28 @@
       <div class="automation-row"><span>Monday</span><span class="automation-time">5:00 AM</span></div>
       <div class="automation-row"><span>Tuesday</span><span class="automation-time">5:00 AM</span></div>
 
+      <h3>Home refreshes</h3>
+      <div class="automation-row"><span>Last week's results table</span><span class="automation-time">Tuesday morning</span></div>
+      <div class="automation-row"><span>Parlay card</span><span class="automation-time">When it's placed</span></div>
+
       <h3>Texts go out automatically when...</h3>
       <ul>
+        <li>The week opens for picks (Tuesday morning)</li>
         <li>Everyone's picks are in for the week - you'll get the group's consensus for every game</li>
-        <li>A tie needs breaking</li>
-        <li>A tie gets resolved</li>
+        <li>A tie is found, is still tied after a re-vote, or gets resolved</li>
+        <li>A runback vote opens, and when it passes or fails</li>
+        <li>The Parlay (or a runback) is placed</li>
+        <li>You haven't picked yet - only if you've set up your own reminders</li>
       </ul>
-      <p style="color:var(--text-dim); font-size:12px;">You can opt out of any of these individually if you want fewer texts - just ask the commissioner.</p>
+      <p style="color:var(--text-dim); font-size:12px;">You can switch any of these on or off yourself on the Profile screen.</p>
     </div>
 
     <div class="card">
       <h2>✨ A Few Fun Details</h2>
       <ul>
         <li>Everyone can set a <strong>nickname</strong> that shows up everywhere instead of your login name</li>
+        <li>The app knows the difference between <strong>preseason and regular season</strong> - preseason games are fun to pick, but don't count toward real Standings</li>
+        <li>The app opens quickly - Home, Games, Parlay and the Table are prepared ahead of time, so they're ready when you tap them</li>
         <li>Tied games are always called out clearly - no more confusing red "loss" coloring on an actual tie</li>
       </ul>
     </div>
