@@ -1512,3 +1512,47 @@ function DEBUG_listTriggers() {
   rows.forEach(r => Logger.log((r.exists ? "OK       " : "MISSING  ") + r.handler + "  (" + r.type + ")"));
   return rows;
 }
+
+
+// ======================================================
+// PERSONAL LOGIN LINKS - texting each person their own link
+// (admin only). Phone-number login keeps working as a fallback.
+// ======================================================
+function loginLinkText_(displayName, link) {
+  return "Hi " + displayName + "! Here is your personal Parlay League link:\n" + link +
+    "\nOpen it, then tap Share > Add to Home Screen. You'll stay signed in, no name or phone number needed. " +
+    "Please don't forward this link - it's you.";
+}
+
+/**
+ * Texts login links. onlyUser = a UserName to text just that person, or
+ * empty to text everyone active with a phone number. Admin only.
+ */
+function adminSendLoginLinks(adminUser, onlyUser) {
+  if (!isUserAdmin_(adminUser)) return { status: "error", message: "Not authorized." };
+  const base = getAppBaseUrl_();
+  if (!base || base.indexOf("/exec") === -1) {
+    return { status: "error", message: "The app address doesn't look right (" + (base || "empty") + "). Run setAppBaseUrl from the editor with your /exec address." };
+  }
+  const keys = ensureLoginKeys_();
+  const names = getUserDisplayNames_();
+  const rows = sheetToObjects_(SHEET_USERS);
+  const sent = [], skipped = [];
+  Object.keys(keys).forEach(name => {
+    if (onlyUser && onlyUser !== name) return;
+    const u = rows.find(r => r.UserName === name);
+    if (!u || !u.Phone) { skipped.push(name + " (no phone)"); return; }
+    const res = sendTwilioSms_(toE164_(u.Phone), loginLinkText_(names[name] || name, loginLinkFor_(keys[name])));
+    (res && res.status === "ok" ? sent : skipped).push(res && res.status === "ok" ? name : name + " (send failed)");
+  });
+  return { status: "ok", sent: sent, skipped: skipped, base: base };
+}
+
+/** Admin only: gives one person a brand-new key (the old link stops working) and texts it to them. */
+function adminResetLoginLink(adminUser, userName) {
+  if (!isUserAdmin_(adminUser)) return { status: "error", message: "Not authorized." };
+  if (!userName) return { status: "error", message: "Pick a person." };
+  ensureLoginKeys_(userName);
+  return adminSendLoginLinks(adminUser, userName);
+}
+ 

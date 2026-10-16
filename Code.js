@@ -35,7 +35,12 @@ function doGet(e) {
   // Public guide page - no login/authentication needed, shareable as a
   // direct link. Anything else falls through to the normal app.
   if (e && e.parameter && e.parameter.page === "guide") {
-    return HtmlService.createTemplateFromFile("Guide")
+    const guidePage = HtmlService.createTemplateFromFile("Guide");
+    let appUrl = "";
+    try { appUrl = getAppBaseUrl_(); } catch (err) { appUrl = ""; }
+    // Lets the Guide's "Back to the app" link find its way home.
+    guidePage.appUrlJson = JSON.stringify(appUrl).replace(/</g, "\\u003c");
+    return guidePage
       .evaluate()
       .setTitle("Parlay Pick 'Em - League Guide")
       .addMetaTag("viewport", "width=device-width, initial-scale=1")
@@ -43,12 +48,54 @@ function doGet(e) {
   }
 
 
-  ensureSupportSheets();
-  return HtmlService.createTemplateFromFile("Index")
+  // Stage one of the two-stage open: send the page as fast as possible and
+  // do no sheet work here at all. If the address carries a personal key
+  // (?k=...), it is handed to the page, which then makes ONE call
+  // (getStartState) for everything it needs to draw the app.
+  const page = HtmlService.createTemplateFromFile("Index");
+  const key = e && e.parameter && e.parameter.k ? String(e.parameter.k) : "";
+  page.startKeyJson = JSON.stringify(key)
+    .replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  return page
     .evaluate()
     .setTitle("Parlay League")
     .addMetaTag("viewport", "width=device-width, initial-scale=1")
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+
+/**
+ * Stage two of the open. Given a personal key, returns who it is plus
+ * everything the first screen needs (admin flag, startup data, Home feed) in
+ * one answer. Returns { status: "none" } for an unknown key so the page can
+ * fall back to the normal name-and-phone login.
+ */
+function getStartState(key) {
+  const t0 = perfStart_();
+  let user = "";
+  try {
+    ensureSupportSheets();
+    const hit = key ? findUserByLoginKey_(key) : null;
+    user = hit ? String(hit.UserName) : "";
+  } catch (err) {
+    Logger.log("start key check failed: " + err.message);
+  }
+  perfLog_("getStartState.keyLookup", t0);
+  if (!user) return { status: "none" };
+
+  const out = { status: "ok", user: user, isAdmin: false, boot: null, home: null };
+  let t1 = perfStart_();
+  try { out.isAdmin = !!isUserAdminCached_(user); } catch (err) { Logger.log("start isAdmin failed: " + err.message); }
+  perfLog_("getStartState.isAdmin", t1); t1 = perfStart_();
+  try { out.boot = getAppBootstrap(); } catch (err) { Logger.log("start boot failed: " + err.message); }
+  perfLog_("getStartState.bootstrap", t1); t1 = perfStart_();
+  try {
+    const h = getHomeFeed(user);
+    if (h && h.status === "ok") out.home = h.notices;
+  } catch (err) { Logger.log("start home failed: " + err.message); }
+  perfLog_("getStartState.home", t1);
+  perfLog_("getStartState.total", t0);
+  return out;
 }
 
 
@@ -114,10 +161,38 @@ function formatTeamRecord_(rec) {
 // per sheet - once per call is plenty.
 let supportSheetsEnsuredThisRun_ = false;
 
+// The check above is per call, and every app open is a fresh call, so each
+// one used to pay ~13 sheet lookups just to learn nothing was missing. The
+// answer is now remembered for 6 hours across calls. If a future version adds
+// a sheet to ensureSupportSheetsImpl_, change this label so it re-checks at once.
+const SUPPORT_SHEETS_SCHEMA_ = "2026-10-14a";
+const SUPPORT_SHEETS_OK_TTL_SECONDS_ = 6 * 60 * 60;
+
 function ensureSupportSheets() {
   if (supportSheetsEnsuredThisRun_) return;
+  let cache = null;
+  try { cache = CacheService.getScriptCache(); } catch (err) { cache = null; }
+  const key = "support-sheets-ok:" + SUPPORT_SHEETS_SCHEMA_;
+  if (cache) {
+    try {
+      if (cache.get(key)) { supportSheetsEnsuredThisRun_ = true; return; }
+    } catch (err) { /* cache trouble - just do the real check */ }
+  }
   ensureSupportSheetsImpl_();
   supportSheetsEnsuredThisRun_ = true;
+  if (cache) {
+    try { cache.put(key, "1", SUPPORT_SHEETS_OK_TTL_SECONDS_); } catch (err) { /* ignore */ }
+  }
+}
+
+// ------------------------------------------------------------
+// TIMING LOGS - lines like "PERF getHomeFeed.dismissals 41ms" appear in the
+// Executions log (open an execution -> Logs). Set PERF_ON_ to false to silence.
+// ------------------------------------------------------------
+const PERF_ON_ = true;
+function perfStart_() { return Date.now(); }
+function perfLog_(label, t0) {
+  if (PERF_ON_) Logger.log("PERF " + label + " " + (Date.now() - t0) + "ms");
 }
 
 function ensureSupportSheetsImpl_() {
@@ -487,7 +562,9 @@ function shortNamesFromRows_(users, displayNames) {
 
 
 function getUserIsAdmin(userName) {
-  return isUserAdmin_(userName);
+  // Cached (a few minutes): this only decides whether the Admin tab is shown.
+  // Every admin action still re-checks the Users sheet live.
+  return isUserAdminCached_(userName);
 }
 
 
@@ -1052,9 +1129,12 @@ function buildParlayRowsForWeek_(year, week, games) {
 
   const tieBreakVotesByEvent = {};
   const tieBreakVotersByEvent = {};
+  const tieBreakPickByEventUser = {};
   tieBreakVotes.forEach(p => {
     if (!tieBreakVotesByEvent[p.EventID]) tieBreakVotesByEvent[p.EventID] = {};
     tieBreakVotesByEvent[p.EventID][p.PickedTeam] = (tieBreakVotesByEvent[p.EventID][p.PickedTeam] || 0) + 1;
+    if (!tieBreakPickByEventUser[p.EventID]) tieBreakPickByEventUser[p.EventID] = {};
+    tieBreakPickByEventUser[p.EventID][p.UserName] = p.PickedTeam;
 
 
     if (!tieBreakVotersByEvent[p.EventID]) tieBreakVotersByEvent[p.EventID] = new Set();
@@ -1115,6 +1195,19 @@ function buildParlayRowsForWeek_(year, week, games) {
           if (tieBreak.pickedTeam) {
             pickedTeam = tieBreak.pickedTeam;
             resolvedVia = "tiebreak";
+          } else {
+            // Still level after the re-vote: the decision-maker's vote counts double.
+            const dm = getDecisionMaker_(year, week);
+            const dmPick = dm && tieBreakPickByEventUser[g.EventID] ? tieBreakPickByEventUser[g.EventID][dm.user] : "";
+            if (dmPick) {
+              const weighted = Object.assign({}, tieBreakVotesByEvent[g.EventID]);
+              weighted[dmPick] = (weighted[dmPick] || 0) + 1;
+              const wr = resolveVoteMap_(weighted);
+              if (wr.pickedTeam) {
+                pickedTeam = wr.pickedTeam;
+                resolvedVia = "tiebreak";
+              }
+            }
           }
         }
       }
@@ -1647,8 +1740,21 @@ function getAppBootstrap() {
     users: usersFromRows_(userRows),
     allYears: getYears(),
     displayNames: displayNames,
-    shortNames: shortNamesFromRows_(userRows, displayNames)
+    shortNames: shortNamesFromRows_(userRows, displayNames),
+    guideUrl: guideUrl_()
   };
+}
+
+// Address of the public Guide page (the app's own address plus ?page=guide).
+function guideUrl_() {
+  try {
+    return cachedLookup_("guideurl", "-", function () {
+      const base = getAppBaseUrl_();
+      return base ? base + (base.indexOf("?") === -1 ? "?" : "&") + "page=guide" : "";
+    });
+  } catch (err) {
+    return "";
+  }
 }
 
 
@@ -1706,6 +1812,77 @@ function getLoginUserList() {
  * user (rather than searching all users by phone, like loginByPhone
  * does). Returns {status:"ok", userName} or {status:"error", message}.
  */
+// ------------------------------------------------------------
+// PERSONAL LOGIN LINKS - one secret key per person, kept in a "LoginKey"
+// column on the Users sheet (created automatically).
+// ------------------------------------------------------------
+const LOGIN_KEY_HEADER_ = "LoginKey";
+
+function newLoginKey_() {
+  return (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, "");
+}
+
+function findUserByLoginKey_(key) {
+  const k = String(key || "").trim();
+  if (k.length < 24) return null;
+  return sheetToObjects_(SHEET_USERS).find(u =>
+    String(u[LOGIN_KEY_HEADER_] || "") === k &&
+    (u.Active === true || u.Active === "TRUE" || u.Active === "true") &&
+    u.UserName !== PARLAY_USER) || null;
+}
+
+/**
+ * Makes sure every active member has a key (adds the column if it isn't
+ * there yet). With regenerateFor = a UserName, that person gets a NEW key
+ * (their old link stops working). Returns { UserName: key }.
+ */
+function ensureLoginKeys_(regenerateFor) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USERS);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  let col = headers.indexOf(LOGIN_KEY_HEADER_);
+  if (col === -1) {
+    col = headers.length;
+    sheet.getRange(1, col + 1).setValue(LOGIN_KEY_HEADER_).setFontWeight("bold");
+  }
+  const cUser = headers.indexOf("UserName");
+  const cActive = headers.indexOf("Active");
+  const out = {};
+  for (let i = 1; i < data.length; i++) {
+    const name = String(data[i][cUser] || "");
+    if (!name || name === PARLAY_USER) continue;
+    const act = data[i][cActive];
+    if (!(act === true || act === "TRUE" || act === "true")) continue;
+    let key = String(data[i][col] || "");
+    if (!key || regenerateFor === name) {
+      key = newLoginKey_();
+      sheet.getRange(i + 1, col + 1).setValue(key);
+    }
+    out[name] = key;
+  }
+  return out;
+}
+
+/** Base web-app address used in login links. Override with setAppBaseUrl(url) if it ever looks wrong. */
+function getAppBaseUrl_() {
+  const saved = PropertiesService.getScriptProperties().getProperty("APP_BASE_URL");
+  if (saved) return saved;
+  return ScriptApp.getService().getUrl() || "";
+}
+
+// Run from the editor with your /exec address pasted in, if the links ever come out wrong.
+function setAppBaseUrl() {
+  const url = "PASTE_YOUR_WEB_APP_EXEC_URL_HERE";
+  if (url.indexOf("http") !== 0) { Logger.log("Edit the url value first."); return; }
+  PropertiesService.getScriptProperties().setProperty("APP_BASE_URL", url);
+  Logger.log("Saved: " + url);
+}
+
+function loginLinkFor_(key) {
+  const base = getAppBaseUrl_();
+  return base + (base.indexOf("?") === -1 ? "?" : "&") + "k=" + key;
+}
+
 function verifyUserLogin(userName, phone) {
   const target = normalizePhone_(phone);
   if (!target) {
@@ -2319,19 +2496,102 @@ function getPreviousWeekLeader_(year, week) {
  * the season).
  */
 function getTieBreakAuthority_(year, week) {
-  const prevWeekLeader = getPreviousWeekLeader_(year, week);
-  if (prevWeekLeader) {
-    return { user: prevWeekLeader, source: "previous week" };
+  const dm = getDecisionMaker_(year, week);
+  return dm ? { user: dm.user, source: dm.source } : null;
+}
+
+/**
+ * DECISION-MAKER for a week's tie-breaks (declared before anyone votes).
+ * Rules: look at the previous week; whoever has the best record there is the
+ * decision-maker. If several people share the best record, look at the week
+ * before that among just those people, and keep going back one week at a time
+ * until one person is left. Week 1 looks back to the previous season's last
+ * week (18, then 17, ...). If history runs out and people are still level, the
+ * first of them in the player order is used. A record is accuracy first, then
+ * number correct; skipped games count against nobody but earn nothing.
+ *
+ * Pure: takes the already-read Results and Picks rows. Returns
+ * { user, source, weeksChecked } where source is a short plain-English reason.
+ */
+function pickDecisionMaker_(year, week, users, resultRows, pickRows) {
+  if (!users || !users.length) return null;
+  const isNumWeek = w => /^\d+$/.test(String(w));
+  const winners = {};
+  let minYear = Number(year);
+  (resultRows || []).forEach(r => {
+    if (!r.WinningTeam || r.WinningTeam === "TIE" || !isNumWeek(r.Week)) return;
+    const y = Number(r.SeasonYear);
+    if (!y) return;
+    const k = y + "|" + Number(r.Week);
+    if (!winners[k]) winners[k] = {};
+    winners[k][r.EventID] = r.WinningTeam;
+    if (y < minYear) minYear = y;
+  });
+  const picksBy = {};
+  (pickRows || []).forEach(p => {
+    if (!p.PickedTeam || p.PickedTeam === "SKIP" || p.UserName === PARLAY_USER || !isNumWeek(p.Week)) return;
+    const k = Number(p.SeasonYear) + "|" + Number(p.Week);
+    if (!winners[k]) return;
+    if (!picksBy[k]) picksBy[k] = [];
+    picksBy[k].push(p);
+  });
+
+  const label = (y, w) => (y === Number(year) ? "Week " + w : y + " Week " + w);
+  let candidates = users.slice();
+  const trail = [];
+  let y = Number(year);
+  let w = Number(week) - 1;
+  let guard = 0;
+  while (y >= minYear && guard++ < 2000) {
+    if (w < 1) { y--; w = 18; continue; }
+    const k = y + "|" + w;
+    const win = winners[k];
+    if (win) {
+      const rec = {};
+      candidates.forEach(u => { rec[u] = { c: 0, t: 0 }; });
+      (picksBy[k] || []).forEach(p => {
+        const r = rec[p.UserName];
+        const wn = win[p.EventID];
+        if (!r || wn === undefined) return;
+        r.t++;
+        if (p.PickedTeam === wn) r.c++;
+      });
+      const score = u => (rec[u].t ? rec[u].c / rec[u].t : 0);
+      let best = -1, bestC = -1;
+      candidates.forEach(u => {
+        const s = score(u);
+        if (s > best || (s === best && rec[u].c > bestC)) { best = s; bestC = rec[u].c; }
+      });
+      const next = candidates.filter(u => score(u) === best && rec[u].c === bestC);
+      trail.push(label(y, w));
+      candidates = next;
+      if (candidates.length === 1) {
+        const source = trail.length === 1
+          ? "best record in " + trail[0]
+          : (trail.length === 2
+              ? "tied in " + trail[0] + ", broken by " + trail[1]
+              : "tied for " + (trail.length - 1) + " weeks, broken by " + trail[trail.length - 1]);
+        return { user: candidates[0], source: source, weeksChecked: trail.length };
+      }
+    }
+    w--;
   }
+  return {
+    user: candidates[0],
+    source: trail.length ? "level through every recorded week - first in the player order" : "no earlier results yet - first in the player order",
+    weeksChecked: trail.length
+  };
+}
 
-
-  const overallLeader = getStandingsLeader_(year);
-  if (overallLeader) {
-    return { user: overallLeader, source: "season" };
+function getDecisionMaker_(year, week) {
+  try {
+    return cachedLookup_("dm", year + "|" + week, function () {
+      return pickDecisionMaker_(year, week, getUsers(), sheetToObjects_(SHEET_RESULTS), sheetToObjects_(SHEET_PICKS));
+    });
+  } catch (err) {
+    Logger.log("getDecisionMaker_ failed: " + err.message);
+    return null;
   }
-
-
-  return null;
 }
 
 
@@ -3416,10 +3676,13 @@ function generateAllParlayPicksAllYearsFastImpl_() {
     .filter(p => p.PickedTeam && Number(p.SeasonYear) >= minYear);
   const tieBreakVotesByKey = {};
   const tieBreakVotersByKey = {};
+  const tieBreakPickByKeyUser = {};
   tieBreakRows.forEach(p => {
     const key = p.SeasonYear + "|" + p.Week + "|" + p.EventID;
     if (!tieBreakVotesByKey[key]) tieBreakVotesByKey[key] = {};
     tieBreakVotesByKey[key][p.PickedTeam] = (tieBreakVotesByKey[key][p.PickedTeam] || 0) + 1;
+    if (!tieBreakPickByKeyUser[key]) tieBreakPickByKeyUser[key] = {};
+    tieBreakPickByKeyUser[key][p.UserName] = p.PickedTeam;
     if (!tieBreakVotersByKey[key]) tieBreakVotersByKey[key] = new Set();
     tieBreakVotersByKey[key].add(p.UserName);
   });
@@ -3435,6 +3698,24 @@ function generateAllParlayPicksAllYearsFastImpl_() {
 
 
   const activeUsers = getUsers();
+
+  // Decision-maker per week, worked out only if some game needs it (it has to
+  // look back through earlier weeks, so it reads ALL Results and Picks, once).
+  let dmData = null;
+  const dmMemo = {};
+  const findDecisionMaker_ = (y, w) => {
+    const k = y + "|" + w;
+    if (!(k in dmMemo)) {
+      try {
+        if (!dmData) dmData = { results: sheetToObjects_(SHEET_RESULTS), picks: sheetToObjects_(SHEET_PICKS) };
+        dmMemo[k] = pickDecisionMaker_(y, w, activeUsers, dmData.results, dmData.picks);
+      } catch (err) {
+        Logger.log("decision-maker lookup failed for " + k + ": " + err.message);
+        dmMemo[k] = null;
+      }
+    }
+    return dmMemo[k];
+  };
 
 
   // Same vote-resolution helper as computeParlayPicksForWeek
@@ -3494,6 +3775,18 @@ function generateAllParlayPicksAllYearsFastImpl_() {
             if (tieBreak.pickedTeam) {
               pickedTeam = tieBreak.pickedTeam;
               resolvedVia = "tiebreak";
+            } else {
+              const dm = findDecisionMaker_(g.SeasonYear, g.Week);
+              const dmPick = dm && tieBreakPickByKeyUser[key] ? tieBreakPickByKeyUser[key][dm.user] : "";
+              if (dmPick) {
+                const weighted = Object.assign({}, tieBreakVotesByKey[key] || {});
+                weighted[dmPick] = (weighted[dmPick] || 0) + 1;
+                const wr = resolveVoteMap_(weighted);
+                if (wr.pickedTeam) {
+                  pickedTeam = wr.pickedTeam;
+                  resolvedVia = "tiebreak";
+                }
+              }
             }
           }
         }
@@ -3898,7 +4191,9 @@ function deleteNotice(callerUserName, noticeId) {
  * ID, e.g. next week's pick reminder). Never deletes the underlying
  * Notices row, and never affects anyone else's feed.
  */
-function dismissNotice(userName, noticeId) {
+function dismissNotice(...args) { return runThenBumpVersion_(dismissNoticeImpl_, args); }
+
+function dismissNoticeImpl_(userName, noticeId) {
   if (!userName) return { status: "error", message: "Not logged in." };
   const sheet = ensureNoticeDismissalsSheet_();
   const data = sheet.getDataRange().getValues();
@@ -3950,7 +4245,9 @@ function hasUserPickedAllGamesThisWeek_(userName, year, week) {
  */
 function getHomeFeed(userName) {
   if (!userName) return { status: "error", message: "Not logged in." };
+  let tHf = perfStart_();
   ensureSupportSheets();
+  perfLog_("getHomeFeed.ensureSheets", tHf); tHf = perfStart_();
 
   const year = getCurrentSeasonYear();
   const week = year ? getDefaultWeek(year) : null;
@@ -3961,15 +4258,22 @@ function getHomeFeed(userName) {
   // one that's supposed to have kicked it off but didn't fire.
   // Throttled so a burst of Home opens doesn't repeat the same check.
   if (year && week) throttledRunbackCheck_(year, week);
+  perfLog_("getHomeFeed.yearWeekRunbackCheck", tHf); tHf = perfStart_();
 
+  // Who has dismissed what only changes when someone dismisses a notice
+  // (dismissNotice bumps the data version), so it is remembered per person.
   const dismissedIds = new Set(
-    sheetToObjects_(SHEET_NOTICE_DISMISSALS)
-      .filter(d => d.UserName === userName)
-      .map(d => String(d.NoticeID))
+    cachedLookup_("dismissals", String(userName), function () {
+      return sheetToObjects_(SHEET_NOTICE_DISMISSALS)
+        .filter(d => d.UserName === userName)
+        .map(d => String(d.NoticeID));
+    })
   );
+  perfLog_("getHomeFeed.dismissals", tHf); tHf = perfStart_();
 
-  const lastSeenAt = readFeedState_(userName).lastSeenAt;
-  const isAdmin = isUserAdmin_(userName);
+  const lastSeenAt = getLastSeenAt_(userName);
+  const isAdmin = isUserAdminCached_(userName);
+  perfLog_("getHomeFeed.lastSeenAndAdmin", tHf); tHf = perfStart_();
 
   // Posted notices are the same for everyone, so they come from a shared
   // cached copy (refreshed whenever a notice is posted or removed).
@@ -3989,6 +4293,7 @@ function getHomeFeed(userName) {
     })
     .sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
 
+  perfLog_("getHomeFeed.sharedNotices", tHf); tHf = perfStart_();
   const systemNotices = [];
   if (year && week) {
     if (!hasUserPickedAllGamesThisWeek_(userName, year, week)) {
@@ -4027,7 +4332,9 @@ function getHomeFeed(userName) {
       Logger.log("getRunbackStatus failed in getHomeFeed: " + err.message);
     }
 
+    perfLog_("getHomeFeed.pickedAndRunback", tHf); tHf = perfStart_();
     getHomeCards_(year, week).forEach(card => systemNotices.push(card));
+    perfLog_("getHomeFeed.cards", tHf);
   }
 
   // NOTE: this no longer records "last seen" - the page calls markHomeSeen
@@ -4046,6 +4353,7 @@ function getHomeFeed(userName) {
  */
 function markHomeSeen(userName) {
   if (!userName) return { status: "error", message: "Not logged in." };
+  const t0 = perfStart_();
   const state = readFeedState_(userName);
   const now = new Date();
   if (state.rowIndex === -1) {
@@ -4053,7 +4361,41 @@ function markHomeSeen(userName) {
   } else {
     state.sheet.getRange(state.rowIndex, state.colSeen + 1).setValue(now);
   }
+  rememberLastSeenAt_(userName, now);
+  perfLog_("markHomeSeen", t0);
   return { status: "ok" };
+}
+
+// "When did this person last look at Home" is read on every Home open but
+// only written by markHomeSeen, so it is kept in the cache and written
+// through on every visit; the sheet remains the source of truth.
+const LAST_SEEN_CACHE_TTL_SECONDS_ = 6 * 60 * 60;
+function lastSeenCacheKey_(userName) { return "seen:" + userName; }
+
+function rememberLastSeenAt_(userName, when) {
+  try {
+    CacheService.getScriptCache().put(lastSeenCacheKey_(userName), String(when.getTime()), LAST_SEEN_CACHE_TTL_SECONDS_);
+  } catch (err) { /* cache trouble - the sheet still has it */ }
+}
+
+function getLastSeenAt_(userName) {
+  let cache = null;
+  try { cache = CacheService.getScriptCache(); } catch (err) { cache = null; }
+  if (cache) {
+    try {
+      const hit = cache.get(lastSeenCacheKey_(userName));
+      if (hit && !isNaN(Number(hit))) return new Date(Number(hit));
+    } catch (err) { /* fall through to the sheet */ }
+  }
+  const fromSheet = readFeedState_(userName).lastSeenAt;
+  if (fromSheet && cache) rememberLastSeenAt_(userName, fromSheet);
+  return fromSheet;
+}
+
+// Admin flag for display purposes only (showing the Admin tab, Home). Admin
+// actions on the server still use the live isUserAdmin_ check.
+function isUserAdminCached_(userName) {
+  return !!cachedLookup_("isadmin", String(userName), function () { return isUserAdmin_(userName); });
 }
 
 function readFeedState_(userName) {
@@ -4072,6 +4414,111 @@ function readFeedState_(userName) {
     }
   }
   return { sheet: sheet, rowIndex: rowIndex, colSeen: colSeen, lastSeenAt: lastSeenAt };
+}
+
+// ------------------------------------------------------------
+// MONEY TALLY - who owes what to whom, built from the ParlayPlacements sheet.
+// Rules: every week a Parlay is placed, every other active member owes the
+// placer $1; if a runback was placed (RunBackMadeBy filled in) every other
+// active member owes the runback's placer another $1. Preseason weeks and
+// weeks with no placement owe nothing. Winnings are handled outside the app.
+// The tab stays hidden from everyone but admins until an admin publishes it.
+// ------------------------------------------------------------
+const MONEY_PUBLISHED_PROP_ = "MONEY_LEDGER_PUBLISHED";
+const MONEY_STAKE_ = 1;
+
+function computeMoneyBase_(year) {
+  const users = getUsers();
+  const data = ensureParlayPlacementsSheet_().getDataRange().getValues();
+  const headers = data[0] || [];
+  const col = n => headers.indexOf(n);
+  const cRun = col("RunBack"), cMade = col("RunBackMadeBy"), cMadeAt = col("Runback MadeAt");
+  const tz = Session.getScriptTimeZone();
+  const fmt = d => (d instanceof Date && !isNaN(d.getTime())) ? Utilities.formatDate(d, tz, "MM/dd") : "";
+
+  const bets = [];
+  const weekRows = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (Number(row[0]) !== Number(year)) continue;
+    const week = String(row[1]);
+    if (week.charAt(0) === "P") continue; // preseason doesn't count
+    const placer = String(row[2] || "").trim();
+    const rbMade = cMade !== -1 ? String(row[cMade] || "").trim() : "";
+    if (placer) bets.push({ week: week, kind: "parlay", placer: placer, placedAt: fmt(row[3]), owedBy: users.filter(u => u !== placer) });
+    if (rbMade) bets.push({ week: week, kind: "runback", placer: rbMade, placedAt: cMadeAt !== -1 ? fmt(row[cMadeAt]) : "", owedBy: users.filter(u => u !== rbMade) });
+    weekRows.push({
+      week: week, parlayPlacer: placer, runbackPlacer: rbMade,
+      runbackVotedNotPlaced: !!(cRun !== -1 && row[cRun] === "Yes" && !rbMade)
+    });
+  }
+  const weekNum = w => Number(w) || 0;
+  bets.sort((a, b) => weekNum(a.week) - weekNum(b.week) || (a.kind === b.kind ? 0 : a.kind === "parlay" ? -1 : 1));
+  weekRows.sort((a, b) => weekNum(a.week) - weekNum(b.week));
+
+  // Net each pair of people into a single direction.
+  const owed = {};
+  bets.forEach(b => b.owedBy.forEach(d => {
+    owed[d] = owed[d] || {};
+    owed[d][b.placer] = (owed[d][b.placer] || 0) + MONEY_STAKE_;
+  }));
+  const people = Array.from(new Set(users.concat(bets.map(b => b.placer))));
+  const net = [];
+  for (let i = 0; i < people.length; i++) {
+    for (let j = i + 1; j < people.length; j++) {
+      const a = people[i], b = people[j];
+      const diff = ((owed[a] && owed[a][b]) || 0) - ((owed[b] && owed[b][a]) || 0);
+      if (diff > 0) net.push({ from: a, to: b, amount: diff });
+      else if (diff < 0) net.push({ from: b, to: a, amount: -diff });
+    }
+  }
+
+  // Things an admin should look at before publishing.
+  const issues = [];
+  const played = new Set();
+  sheetToObjects_(SHEET_RESULTS).forEach(r => {
+    if (Number(r.SeasonYear) === Number(year) && r.WinningTeam && String(r.Week).charAt(0) !== "P") played.add(String(r.Week));
+  });
+  const placedWeeks = new Set(weekRows.filter(w => w.parlayPlacer).map(w => w.week));
+  Array.from(played).sort((a, b) => weekNum(a) - weekNum(b)).forEach(w => {
+    if (!placedWeeks.has(w)) issues.push("Week " + w + " has final scores but no Parlay placer is recorded (nobody owes anything for it).");
+  });
+  weekRows.forEach(w => {
+    if (w.runbackVotedNotPlaced) issues.push("Week " + w.week + ": the runback vote passed but no runback placer is recorded (nobody owes for it).");
+    [w.parlayPlacer, w.runbackPlacer].forEach(p => {
+      if (p && users.indexOf(p) === -1) issues.push("Week " + w.week + ": " + p + " isn't an active league member.");
+    });
+  });
+
+  return { year: Number(year), users: people, bets: bets, net: net, review: { weeks: weekRows, issues: issues } };
+}
+
+function getMoney(userName, year) {
+  if (!userName) return { status: "error", message: "Not logged in." };
+  const yr = year || getCurrentSeasonYear();
+  if (!yr) return { status: "ok", published: false };
+  const isAdmin = isUserAdmin_(userName);
+  const published = PropertiesService.getScriptProperties().getProperty(MONEY_PUBLISHED_PROP_) === "true";
+  if (!published && !isAdmin) return { status: "ok", published: false, isAdmin: false };
+
+  const base = cachedLookup_("money", String(yr), function () { return computeMoneyBase_(yr); });
+  const out = {
+    status: "ok", published: published, isAdmin: isAdmin, year: base.year,
+    users: base.users, bets: base.bets, net: base.net,
+    mine: {
+      owes: base.net.filter(n => n.from === userName).map(n => ({ to: n.to, amount: n.amount })),
+      owedToMe: base.net.filter(n => n.to === userName).map(n => ({ from: n.from, amount: n.amount }))
+    }
+  };
+  if (isAdmin) out.review = base.review;
+  return out;
+}
+
+/** Admin only: show / hide the Money view for everyone else. */
+function setMoneyPublished(userName, publish) {
+  if (!isUserAdmin_(userName)) return { status: "error", message: "Not authorized." };
+  PropertiesService.getScriptProperties().setProperty(MONEY_PUBLISHED_PROP_, publish ? "true" : "false");
+  return { status: "ok", published: !!publish };
 }
 
 // ------------------------------------------------------------
@@ -4584,6 +5031,15 @@ const DATA_VERSION_PROP_ = "DATA_VERSION";
 const PAYLOAD_CACHE_TTL_SECONDS_ = 600;      // 10 minutes
 const PAYLOAD_CACHE_MAX_CHARS_ = 90000;      // CacheService limit is 100KB per value
 
+// One call can look things up many times; the version is read once per call
+// for the starting key. Our own bumps update it; the check made right
+// before storing a computed value (getDataVersion_) still reads it fresh.
+let dataVersionThisRun_ = null;
+function getDataVersionForRun_() {
+  if (dataVersionThisRun_ === null) dataVersionThisRun_ = getDataVersion_();
+  return dataVersionThisRun_;
+}
+
 function getDataVersion_() {
   return PropertiesService.getScriptProperties().getProperty(DATA_VERSION_PROP_) || "0";
 }
@@ -4597,6 +5053,7 @@ function bumpDataVersion_() {
   try {
     const next = Date.now().toString(36) + Math.floor(Math.random() * 1679616).toString(36); // 4 random base-36 chars
     PropertiesService.getScriptProperties().setProperty(DATA_VERSION_PROP_, next);
+    dataVersionThisRun_ = next;
     return next;
   } catch (err) {
     Logger.log("bumpDataVersion_ failed: " + err.message);
@@ -4674,6 +5131,25 @@ function getCachedWeekPayload_(kind, year, week, builder, withPickWindow) {
 
 function getWeekData(year, week) {
   return getCachedWeekPayload_("week", year, week, buildWeekDataPayload_, true);
+}
+
+/**
+ * One call for everything the app needs right after it opens: the Games
+ * screen for this week, the Parlay screen for this week and the season Table.
+ * All three are shared (not per person) and already cached, so this just
+ * saves the phone two extra round trips. The Games part must succeed (an
+ * error reaches the page as usual); the other two are best-effort and come
+ * back null if they fail, in which case the page asks for them separately.
+ */
+function getOpenBundle(year, week) {
+  let t0 = perfStart_();
+  const out = { week: getWeekData(year, week), parlay: null, standings: null };
+  perfLog_("getOpenBundle.week", t0); t0 = perfStart_();
+  try { out.parlay = getParlayWeekData(year, week); } catch (err) { Logger.log("bundle parlay failed: " + err.message); }
+  perfLog_("getOpenBundle.parlay", t0); t0 = perfStart_();
+  try { out.standings = getStandings(year, ""); } catch (err) { Logger.log("bundle standings failed: " + err.message); }
+  perfLog_("getOpenBundle.standings", t0);
+  return out;
 }
 
 function getParlayWeekData(year, week) {
@@ -4845,7 +5321,7 @@ const LOOKUP_CACHE_TTL_SECONDS_ = 300;
 function cachedLookup_(name, argKey, compute) {
   let cache = null;
   try { cache = CacheService.getScriptCache(); } catch (err) { cache = null; }
-  const startVersion = getDataVersion_();
+  const startVersion = getDataVersionForRun_();
   const dayIso = Utilities.formatDate(getEffectiveNow_(), Session.getScriptTimeZone(), "yyyy-MM-dd");
   const key = "lk:" + name + ":" + startVersion + ":" + dayIso + ":" + argKey;
 
