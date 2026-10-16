@@ -1,6 +1,13 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "parlayleague",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-10-16"
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "parlayleague",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-16",
+	"d1_databases": [
+		{
+			"binding": "parlayleague_db",
+			"database_name": "parlayleague-db",
+			"database_id": "5b19ac51-3fe9-400f-8779-d334d184d749"
+		}
+	]
 }
